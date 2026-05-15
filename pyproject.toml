@@ -1,0 +1,14 @@
+[project]
+name = "meta_labeling_project"
+version = "0.1.0"
+description = "Synthetic data, triple-barrier labeling, and meta-labeling experiments."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "scikit-learn",
+    "jupyter",
+    "ipykernel",
+]
