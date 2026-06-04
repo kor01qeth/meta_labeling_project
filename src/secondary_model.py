@@ -15,7 +15,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.metrics import classification_report, roc_auc_score 
 
 
 # Building a new dataframe that can be used for the logistic regression
@@ -160,3 +160,200 @@ def fit_logistic_baseline(train_df, test_df, feature_cols, target_col="label"):
     out_test_df["predicted label"] = pred_test
 
     return model, out_test_df
+
+
+############
+#ADDED PART
+############
+
+"""
+Purpose:
+    The functions below extend the earlier secondary-model workflow.
+
+    They introduce a chronological train-validation-test split with
+    purging, so that the triple-barrier horizon does not create leakage
+    between datasets.
+
+    The model-fitting step is also separated from thresholding, allowing
+    predicted probabilities to be used later for trade filtering, sizing,
+    and test-set evaluation.
+"""
+
+# Train - val - test split
+
+def purged_time_split(df, horizon, train_frac=0.50, val_frac=0.25, dates_col="t0"):
+    """
+    Parameters
+        df
+            Secondary-model event dataframe
+        horizon
+            Triple-barrier horizon
+        train_frac
+            Fraction for training
+        val_frac
+            Fraction for validation
+        date_col:
+            Event start date
+    Output
+        train, val, test
+            Purged train, validation and test datasets
+        val_start, test_start
+            Split dates
+    """
+
+    out = df.copy()
+
+    # For purging, have to get the end of barrier, we use trading days, can't just add horizon
+    unique_dates = np.sort(out[dates_col].dropna().unique())
+
+    train_end_id = int(len(unique_dates) * train_frac)
+    val_end_id = int(len(unique_dates) * (train_frac + val_frac))
+
+    val_start = unique_dates[train_end_id]
+    test_start = unique_dates[val_end_id]
+
+    date_to_id = {date: id for id, date in enumerate(unique_dates)}
+
+    # Creating lengthened dates with horizon added
+    out["barrier_start"] = out[dates_col].map(date_to_id)
+    out["barrier_end"] = np.minimum(out["barrier_start"] + horizon, len(unique_dates) - 1)
+    out["end_date"] = out["barrier_end"].map(lambda i: unique_dates[i])
+
+    # Making sure no intersection
+    train = out[
+        (out[dates_col] < val_start) &
+        (out["end_date"] < val_start)
+    ].copy()
+
+    val = out[
+        (out[dates_col] >= val_start) &
+        (out[dates_col] < test_start) &
+        (out["end_date"] < test_start)
+    ].copy()
+
+    test = out[
+        out[dates_col] >= test_start
+    ].copy()
+
+    train = train.drop(columns=["barrier_start", "barrier_end", "end_date"])
+    val = val.drop(columns=["barrier_start", "barrier_end", "end_date"])
+    test = test.drop(columns=["barrier_start", "barrier_end", "end_date"])
+
+    return train, val, test, val_start, test_start
+
+
+
+# Model itself with validation added
+
+def fit_logistic(train_df, val_df, test_df, feature_cols, target_col="label"):
+
+    X_train = train_df[feature_cols]
+    y_train = train_df[target_col]
+
+    X_val = val_df[feature_cols]
+    X_test = test_df[feature_cols]
+
+    model = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+        ("clf", LogisticRegression(max_iter=1000, class_weight="balanced"))
+    ])
+
+    model.fit(X_train, y_train)
+
+    # Getting the probabilities
+    train_out = train_df.copy()
+    val_out = val_df.copy()
+    test_out = test_df.copy()
+
+    train_out["probability"] = model.predict_proba(X_train)[:, 1]
+    val_out["probability"] = model.predict_proba(X_val)[:, 1]
+    test_out["probability"] = model.predict_proba(X_test)[:, 1]
+
+    return model, train_out, val_out, test_out
+
+
+# Simple sanity check
+
+def roc_auc_table(df, target_col="label", proba_col="probability"):
+  
+    y_true = df[target_col]
+    proba = df[proba_col]
+
+    roc_auc = roc_auc_score(y_true, proba)
+    summary = pd.DataFrame({"Metric": ["ROC AUC"],"Value": [roc_auc]})
+    
+    return summary
+
+
+# New column for threshold
+
+def apply_probability_threshold(df, threshold, proba_col="probability"):
+
+    out = df.copy()
+    out["meta_label"] = (out[proba_col] >= threshold).astype(int)
+
+    return out
+
+# Sanity check for threshould
+
+def threshold_diagnostics(df, target_col="label", pred_col="meta_label"):
+
+    y_true = df[target_col]
+    y_pred = df[pred_col]
+
+    trades_total = len(df)
+    trades_kept = y_pred.sum()
+    trades_removed = trades_total - trades_kept
+    fraction_kept = trades_kept / trades_total
+
+    if trades_kept > 0:
+        kept_positive_rate = y_true[y_pred == 1].mean()
+    else:
+        kept_positive_rate = np.nan
+
+    base_positive_rate = y_true.mean()
+
+
+    summary = pd.DataFrame({"Metric": [
+            "Total trades",
+            "Trades kept",
+            "Trades removed",
+            "Fraction kept",
+            "Base positive rate",
+            "Positive rate among kept trades"],
+        "Value": 
+            [trades_total,
+            trades_kept,
+            trades_removed,
+            fraction_kept,
+            base_positive_rate,
+            kept_positive_rate]})
+    
+    return summary
+
+# New weights according to (predicted meta-label) * primary weights
+
+def create_filtered_weights(primary_weights, filtered_df, date_col="t0", asset_col="stock", signal_col="meta_label"):
+
+    meta_weights = primary_weights.copy() * 0.0
+
+    for _, row in filtered_df.iterrows():
+
+        date = row[date_col]
+        asset = row[asset_col]
+
+        if date in meta_weights.index and asset in meta_weights.columns:
+            meta_weights.loc[date, asset] = primary_weights.loc[date, asset] * row[signal_col]
+
+    return meta_weights
+
+
+# PnL
+
+def calculate_strategy_pnl(weights, returns):
+
+    aligned_returns = returns.reindex(weights.index)
+    pnl = (weights * aligned_returns).sum(axis=1).to_frame("PnL")
+
+    return pnl
