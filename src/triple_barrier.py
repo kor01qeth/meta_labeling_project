@@ -43,7 +43,8 @@ def simple_triple_barrier_labels(df_returns, wt, horizon, vol_window=20):
             - label
     """
     # Using rolling volatility for barrier construction
-    rolling_vol = df_returns.rolling(vol_window).std(ddof=1)
+    ### Updated: Added a shift for rolling vol calculation
+    rolling_vol = df_returns.shift(1).rolling(vol_window).std(ddof=1)
     results = []
 
     valid_dates = wt.index[:len(wt.index) - horizon]
@@ -62,7 +63,8 @@ def simple_triple_barrier_labels(df_returns, wt, horizon, vol_window=20):
             sl = sigma * np.sqrt(horizon)
 
             # Using cumulative returns
-            future_window = df_returns.iloc[loc + 1 : loc + 1 + horizon][stock]
+            ### Updated: taking the +1 away from loc : loc + horizon
+            future_window = df_returns.iloc[loc : loc + horizon][stock]
             cum_ret = (1 + future_window).cumprod() - 1
             signed_cum_ret = side * cum_ret
 

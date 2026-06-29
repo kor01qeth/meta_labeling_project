@@ -18,10 +18,10 @@ def compute_spearman_ic_curve(signal, df_returns, horizons):
         for t in signal.index:
             loc = df_returns.index.get_loc(t)
 
-            if loc + h >= len(df_returns.index):
+            if loc + h > len(df_returns.index):
                 continue
 
-            future_window = df_returns.iloc[loc+1:loc+1+h, :]
+            future_window = df_returns.iloc[loc:loc+h, :]
             future_ret = (1 + future_window).prod(axis=0) - 1
 
             ic_val = signal.loc[t].corr(future_ret, method="spearman")

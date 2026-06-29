@@ -49,9 +49,10 @@ def build_secondary_dataset(df_returns, labels, vol_window=20):
     # is specified as an input, but as of now, the function computes rolling 
     # volatility for multiple windows. 
     
-    vol_20 = df_returns.rolling(vol_window).std(ddof=1)
-    vol_60 = df_returns.rolling(60).std(ddof=1)
-    vol_150 = df_returns.rolling(150).std(ddof=1)
+    ### Updated: lag rolling vol by 1 so that current day is excluded
+    vol_20 = df_returns.shift(1).rolling(vol_window).std(ddof=1)
+    vol_60 = df_returns.shift(1).rolling(60).std(ddof=1)
+    vol_150 = df_returns.shift(1).rolling(150).std(ddof=1)
 
     rows = []
 
@@ -73,7 +74,34 @@ def build_secondary_dataset(df_returns, labels, vol_window=20):
         vol20 = vol_20.loc[t0, stock]
         vol60 = vol_60.loc[t0, stock]
         vol150 = vol_150.loc[t0, stock]
+        ### Added: correlation features:
+        #returns_lagged = df_returns.shift(1)
+        #market_return = returns_lagged.mean(axis=1)
 
+        #market_mean_60 = market_return.rolling(60).mean()
+        #market_std_60 = market_return.rolling(60).std(ddof=1)
+
+        #stock_mean_60 = returns_lagged.rolling(60).mean()
+        #stock_std_60 = returns_lagged.rolling(60).std(ddof=1)
+
+        #cov_mkt_60 = (
+        #    returns_lagged.mul(market_return, axis=0).rolling(60).mean()
+        #    - stock_mean_60.mul(market_mean_60, axis=0))
+
+        #corr_mkt_60 = cov_mkt_60.div(stock_std_60.mul(market_std_60, axis=0))
+        # Market correlation - note that if we don't do it by hand, the kernel simply dies.
+
+        #market_mean_150 = market_return.rolling(150).mean()
+        #market_std_150 = market_return.rolling(150).std(ddof=1)
+
+        #stock_mean_150 = returns_lagged.rolling(150).mean()
+        #stock_std_150 = returns_lagged.rolling(150).std(ddof=1)
+
+        #cov_mkt_150 = (
+        #   returns_lagged.mul(market_return, axis=0).rolling(150).mean()
+        #   - stock_mean_150.mul(market_mean_150, axis=0))
+
+        #corr_mkt_150 = cov_mkt_150.div(stock_std_150.mul(market_std_150, axis=0))
         # Note: the below features have been used to test feature importance, but have not been used in the final model. 
         #denom_20 = max(vol20, 1e-8)
         #denom_60 = max(vol60, 1e-8)
@@ -97,6 +125,8 @@ def build_secondary_dataset(df_returns, labels, vol_window=20):
             "vol_20": vol20,
             "vol_60": vol60,
             "vol_150": vol150,
+            #"corr_60": corr_mkt_60,
+            #"corr_150": corr_mkt_150,
             "label": label
         })
 
@@ -161,6 +191,56 @@ def fit_logistic_baseline(train_df, test_df, feature_cols, target_col="label"):
 
     return model, out_test_df
 
+# Try
+
+# Market correlation
+
+# Market correlation
+
+def add_market_correlation_features(secondary_data, df_returns, windows=(20, 60, 150)):
+    """
+    Add rolling correlation-to-market features.
+
+    Params
+        secondary_data
+            Event-level secondary model dataset
+        df_returns
+            Return matrix
+        windows
+            Rolling correlation windows
+
+    Output
+        out
+            Secondary dataset with market correlation features
+    """
+
+    # Data
+
+    out = secondary_data.copy()
+
+    returns_lagged = df_returns.shift(1)
+    market_return = returns_lagged.mean(axis=1)
+
+    # Correlations
+
+    for window in windows:
+
+        feature_name = f"corr_mkt_{window}"
+        out[feature_name] = np.nan
+
+        for stock in out["stock"].unique():
+
+            if stock not in returns_lagged.columns:
+                continue
+
+            stock_corr = returns_lagged[stock].rolling(window).corr(market_return)
+
+            mask = out["stock"] == stock
+            dates = out.loc[mask, "t0"]
+
+            out.loc[mask, feature_name] = dates.map(stock_corr)
+
+    return out
 
 ############
 #ADDED PART

@@ -8,6 +8,7 @@ dependencies = [
     "numpy",
     "pandas",
     "matplotlib",
+    "numba",
     "scikit-learn",
     "jupyter",
     "ipykernel",
